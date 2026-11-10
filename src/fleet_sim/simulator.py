@@ -29,6 +29,7 @@ class Robot:
     position: int
     task: Task | None = None
     carrying: bool = False
+    service_done: int = 0
 
     @property
     def goal(self) -> int:
@@ -44,7 +45,12 @@ class SimConfig:
     warmup: int = 200
     seed: int = 1
     arrival_rate: float | None = None
+    station_time: int = 0
     strict: bool = False
+
+    def __post_init__(self) -> None:
+        if self.station_time < 0:
+            raise ValueError("station_time cannot be negative")
 
 
 @dataclass
@@ -65,6 +71,7 @@ class Metrics:
     longest_stall: int = 0
     tasks_waiting_at_end: int = 0
     fallback_ticks: int = 0
+    service_interruptions: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -144,7 +151,11 @@ class Simulation:
                 plan_ms.append(elapsed)
                 metrics.collisions += len(problems)
             for robot, cell in zip(robots, following, strict=True):
-                if measured and robot.task is not None:
+                in_service = robot.service_done > 0 and robot.position == robot.goal
+                if in_service and cell != robot.position and measured:
+                    # The planner moved a robot that was still being served at its station.
+                    metrics.service_interruptions += 1
+                if measured and robot.task is not None and not in_service:
                     active += 1
                     if cell == robot.position:
                         waits += 1
@@ -156,11 +167,16 @@ class Simulation:
                 if not robot.carrying:
                     robot.carrying = True
                     continue
+                if robot.service_done < config.station_time:
+                    # Service time only counts while the robot is on its station cell.
+                    robot.service_done += 1
+                    continue
                 if measured:
                     metrics.completed += 1
                     cycles.append(tick + 1 - robot.task.assigned)
                 robot.task = None
                 robot.carrying = False
+                robot.service_done = 0
                 last_completion = tick
             if measured:
                 metrics.longest_stall = max(metrics.longest_stall, tick - last_completion)

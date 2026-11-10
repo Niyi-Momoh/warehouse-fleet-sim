@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from fleet_sim.grid import UNREACHABLE, Grid
-from fleet_sim.layout import make_warehouse
+from fleet_sim.layout import Warehouse, make_warehouse
 from fleet_sim.planners import PLANNERS
 from fleet_sim.simulator import Metrics, SafetyError, SimConfig, Simulation, percentile
 from fleet_sim.validate import check_step
@@ -152,3 +152,59 @@ def test_readme_results_match_the_benchmark_file():
     spec.loader.exec_module(module)
     study = json.loads((root / "results" / "benchmark.json").read_text())
     assert module.block(study) in (root / "README.md").read_text()
+
+
+def test_robot_stays_at_its_station_for_the_service_time():
+    grid = Grid.from_ascii(["....."])
+    station = grid.cell(4, 0)
+    warehouse = Warehouse(grid, (grid.cell(2, 0),), (station,))
+    for service in (0, 3):
+        config = SimConfig(robots=1, ticks=40, warmup=0, seed=1, station_time=service)
+        simulation = Simulation(warehouse, "pibt", config, record=True)
+        metrics = simulation.run()
+        assert metrics.completed > 0
+        frames = simulation.frames
+        first_arrival = next(i for i, (cells, _) in enumerate(frames) if cells[0] == station)
+        stay = 0
+        while frames[first_arrival + stay][0][0] == station:
+            stay += 1
+        assert stay == service + 1
+
+
+def test_zero_station_time_matches_the_original_behaviour():
+    base = SimConfig(robots=20, ticks=200, warmup=50, seed=3)
+    explicit = SimConfig(robots=20, ticks=200, warmup=50, seed=3, station_time=0)
+    first = Simulation(make_warehouse(), "pibt", base).run().to_dict()
+    second = Simulation(make_warehouse(), "pibt", explicit).run().to_dict()
+    for result in (first, second):
+        result.pop("plan_ms_p50")
+        result.pop("plan_ms_p99")
+    assert first == second
+
+
+def test_longer_station_time_reduces_throughput():
+    def throughput(service: int) -> float:
+        config = SimConfig(robots=30, ticks=500, warmup=100, seed=2, station_time=service)
+        return Simulation(make_warehouse(), "pibt", config).run().throughput_per_1000
+
+    assert throughput(20) < throughput(0)
+
+
+def test_negative_station_time_is_rejected():
+    with pytest.raises(ValueError):
+        SimConfig(station_time=-1)
+
+
+@pytest.mark.parametrize("name", sorted(PLANNERS))
+def test_station_time_keeps_every_move_safe(name):
+    config = SimConfig(robots=40, ticks=150, warmup=0, seed=5, station_time=10, strict=True)
+    assert Simulation(make_warehouse(), name, config).run().collisions == 0
+
+
+def test_readme_station_results_match_the_results_file():
+    root = Path(__file__).parents[1]
+    spec = importlib.util.spec_from_file_location("report", root / "benchmarks" / "report.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    study = json.loads((root / "results" / "station_time.json").read_text())
+    assert module.station_block(study) in (root / "README.md").read_text()

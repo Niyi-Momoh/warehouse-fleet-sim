@@ -196,17 +196,52 @@ def animation(frames_count: int = 120, scale: int = 12) -> None:
     )
 
 
+STATION_START = "<!-- station:start -->"
+STATION_END = "<!-- station:end -->"
+
+
+def render_station(study: dict) -> str:
+    groups: dict[tuple[str, int, int], list[dict]] = defaultdict(list)
+    for run in study["runs"]:
+        groups[run["planner"], run["robots"], run["station_time"]].append(run)
+    stations = study["stations"]
+    lines = [
+        f"Means over {len(study['seeds'])} seeds. Capacity is the most tasks per 1,000 ticks "
+        f"that {stations} stations could handle if a new robot arrived the moment the last "
+        "one left.",
+        "",
+        "| Planner | Robots | Station time (ticks) | Tasks per 1,000 ticks | Station capacity "
+        "| Mean task time (ticks) | Robots pushed off a station mid-service |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for planner, robots, station_time in sorted(groups):
+        group = groups[planner, robots, station_time]
+        capacity = f"{stations * 1000 / (station_time + 1):.0f}" if station_time else "Not limiting"
+        lines.append(
+            f"| {NAMES[planner]} | {robots} | {station_time} | "
+            f"{_mean(group, 'throughput_per_1000'):.0f} | {capacity} | "
+            f"{_task_time(group)} | {_mean(group, 'service_interruptions'):.0f} |"
+        )
+    return "\n".join(lines)
+
+
+def station_block(study: dict) -> str:
+    return f"{STATION_START}\n{render_station(study)}\n{STATION_END}"
+
+
+def _replace(text: str, start: str, end: str, content: str) -> str:
+    return re.sub(re.escape(start) + ".*?" + re.escape(end), lambda _: content, text, flags=re.S)
+
+
 def main() -> None:
     study = json.loads(Path("results/benchmark.json").read_text())
     readme = Path("README.md")
-    readme.write_text(
-        re.sub(
-            re.escape(START) + ".*?" + re.escape(END),
-            lambda _: block(study),
-            readme.read_text(),
-            flags=re.S,
-        )
-    )
+    text = _replace(readme.read_text(), START, END, block(study))
+    station_file = Path("results/station_time.json")
+    if station_file.exists():
+        stations = json.loads(station_file.read_text())
+        text = _replace(text, STATION_START, STATION_END, station_block(stations))
+    readme.write_text(text)
     if "--text-only" not in sys.argv:
         chart(study)
         animation()

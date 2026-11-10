@@ -20,10 +20,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--arrival-rate", type=float, help="tasks per tick; omit for an unlimited backlog"
     )
+    parser.add_argument(
+        "--station-time", type=int, default=0, help="ticks a robot spends at a station"
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.warmup < args.ticks:
         parser.error("--warmup must be at least 0 and less than --ticks")
-    config = SimConfig(args.robots, args.ticks, args.warmup, args.seed, args.arrival_rate)
+    if args.station_time < 0:
+        parser.error("--station-time cannot be negative")
+    config = SimConfig(
+        args.robots, args.ticks, args.warmup, args.seed, args.arrival_rate, args.station_time
+    )
     print(json.dumps(Simulation(make_warehouse(), args.planner, config).run().to_dict(), indent=2))
 
 
